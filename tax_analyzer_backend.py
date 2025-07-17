@@ -1,6 +1,6 @@
 # --- Part 1: Backend Server (tax_analyzer_backend.py) ---
 # To run this:
-# 1. Install dependencies: pip install Flask Flask-Cors psycopg2-binary Werkzeug PyMuPDF Pillow requests python-dotenv
+# 1. Install dependencies: pip install Flask Flask-Cors psycopg2-binary Werkzeug PyMuPDF requests python-dotenv
 # 2. Create a .env file in the same directory with your database credentials (see below)
 # 3. Run the script: python tax_analyzer_backend.py
 
@@ -32,7 +32,7 @@ DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
 
 # --- Gemini API Details (Read from Environment Variables) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+GEMINI_API_URL = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){GEMINI_API_KEY}"
 
 
 # --- Database Helper Functions ---
@@ -209,7 +209,6 @@ def summarize_notice():
 if __name__ == '__main__':
     create_users_table()
     app.run(debug=True, port=5000)
-
 ```react
 // --- Part 2: Frontend Application (App.js) ---
 // This React code is now designed to communicate with the Python backend server.
@@ -217,7 +216,7 @@ if __name__ == '__main__':
 import React, { useState, useEffect } from 'react';
 
 // --- API Functions (Now making real fetch calls) ---
-const API_BASE_URL = 'http://127.0.0.1:5000'; // URL of our Python backend
+const API_BASE_URL = '[http://127.0.0.1:5000](http://127.0.0.1:5000)'; // URL of our Python backend
 
 const api = {
   async register(payload) {
@@ -253,7 +252,7 @@ const api = {
 
 // --- Helper Components & Icons (Same as before) ---
 const FileHeart = (props) => (
-  <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg {...props} xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4" />
     <path d="M14 2v6h6" />
     <path d="M10.3 12.3c.8-1 2-1.5 3.2-1.5 2.2 0 4 1.8 4 4 0 2.5-3.4 4.9-5.2 6.2a.5.5 0 0 1-.6 0C10 19.4 6 17 6 14.5c0-2.2 1.8-4 4-4 .8 0 1.5.3 2.1.8" />
