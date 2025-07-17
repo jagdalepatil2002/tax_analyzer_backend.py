@@ -13,7 +13,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import fitz  # PyMuPDF
 import requests 
 import json
-from dotenv import load_dotenv # Import dotenv
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
@@ -22,16 +22,15 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# --- Database Connection Details (FIX: Read from Environment Variables) ---
-# This is now secure. The values will be set in your deployment service (e.g., Render).
+# --- Database Connection Details (Read from Environment Variables) ---
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
-DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require") # Default to 'require'
+DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
 
-# --- Gemini API Details (FIX: Read from Environment Variables) ---
+# --- Gemini API Details (Read from Environment Variables) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
@@ -40,7 +39,6 @@ GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemin
 
 def get_db_connection():
     """Establishes a connection to the PostgreSQL database."""
-    # Add a check to ensure all required environment variables are set
     if not all([DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME]):
         print("Error: Database environment variables are not fully set.")
         return None
@@ -246,13 +244,10 @@ const api = {
     
     const response = await fetch(`${API_BASE_URL}/summarize`, {
       method: 'POST',
-      body: formData, // No Content-Type header needed for FormData
+      body: formData,
     });
     return response.json();
   },
-
-  // Session management would be handled with secure tokens (e.g., JWT)
-  // For simplicity, we'll manage login state on the frontend for this example.
 };
 
 
@@ -273,7 +268,6 @@ const LoadingSpinner = () => (
 
 
 // --- Screen Components (AuthScreen, UploadScreen, SummaryScreen - mostly unchanged) ---
-// ... (UI Components are the same as the previous version, just the handlers change)
 const AuthScreen = ({ isLogin, handleLogin, handleRegister, error, firstName, setFirstName, lastName, setLastName, email, setEmail, password, setPassword, confirmPassword, setConfirmPassword, setView, clearFormFields}) => (
     <div className="bg-white p-8 sm:p-10 rounded-2xl shadow-lg border border-gray-100 max-w-md w-full" style={{ backgroundColor: '#F9F5FF' }}>
         <h2 className="text-3xl font-bold text-center text-purple-800 mb-1">{isLogin ? "Hello There!" : "Create Your Account"}</h2>
@@ -344,7 +338,14 @@ export default function App() {
     const [lastName, setLastName] = useState('');
     const [summaryData, setSummaryData] = useState(null);
 
-    const clearFormFields = () => { /* ... */ };
+    const clearFormFields = () => {
+        setEmail('');
+        setPassword('');
+        setConfirmPassword('');
+        setFirstName('');
+        setLastName('');
+        setError('');
+    };
 
     const handleRegister = async (e) => {
         e.preventDefault();
@@ -374,7 +375,7 @@ export default function App() {
                 setView('summary');
             } else {
                 setError(result.message);
-                setView('upload'); // Go back to upload on error
+                setView('upload'); 
             }
         }
     };
