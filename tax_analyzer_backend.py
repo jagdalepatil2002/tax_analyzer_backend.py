@@ -1,4 +1,209 @@
 # --- Final Backend Server (tax_analyzer_backend.py) ---
+# This is the complete and final version.
+
+import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
+import fitz
+import requests 
+import json
+from dotenv import load_dotenv
+
+# Load environment variables for local development
+load_dotenv()
+
+# --- Flask App Initialization ---
+app = Flask(__name__)
+CORS(app)
+
+# --- Database Connection Details (from Environment Variables) ---
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_NAME = os.getenv("DB_NAME")
+DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
+
+# --- Gemini API Details (from Environment Variables) ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+
+def get_db_connection():
+    """Establishes a secure connection to the PostgreSQL database."""
+    if not all([DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME]):
+        print("FATAL ERROR: Database environment variables are not fully set.")
+        return None
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST, port=DB_PORT, user=DB_USER,
+            password=DB_PASSWORD, dbname=DB_NAME, sslmode=DB_SSL_MODE,
+            cursor_factory=RealDictCursor
+        )
+        return conn
+    except psycopg2.Error as e:
+        print(f"DATABASE CONNECTION FAILED: {e}")
+        return None
+
+def initialize_database():
+    """
+    Creates the users table if it doesn't exist and adds new columns if they are missing.
+    This is the critical fix.
+    """
+    conn = get_db_connection()
+    if not conn:
+        print("Could not initialize database, connection failed.")
+        return
+
+    try:
+        with conn.cursor() as cur:
+            # Step 1: Create the base table if it's not there.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    first_name VARCHAR(100) NOT NULL,
+                    last_name VARCHAR(100) NOT NULL,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
+            # Step 2: Add the 'dob' column if it doesn't exist.
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS dob DATE;")
+            
+            # Step 3: Add the 'mobile_number' column if it doesn't exist.
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile_number VARCHAR(25);")
+            
+            conn.commit()
+            print("Database schema updated and verified successfully.")
+    except psycopg2.Error as e:
+        print(f"DATABASE SCHEMA ERROR: {e}")
+    finally:
+        conn.close()
+
+# --- PDF & AI Helper Functions ---
+def extract_text_from_pdf(pdf_bytes):
+    """Extracts text from a PDF."""
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            return "".join(page.get_text() for page in doc)
+    except Exception as e:
+        print(f"PDF EXTRACTION ERROR: {e}")
+        return None
+
+def call_gemini_api(text):
+    """Calls the Gemini API to summarize the extracted text."""
+    prompt = f"""
+    You are an expert tax notice summarizer. Analyze the following text extracted from an IRS tax notice and return a JSON object with the summary.
+    The JSON object must have the following keys: "noticeFor", "address", "ssn", "amountDue", "payBy", "reason", "details", "fixSteps", "paymentOptions", "helpNumber".
+    ---
+    {text}
+    ---
+    """
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    try:
+        response = requests.post(GEMINI_API_URL, json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        summary_json_string = result['candidates'][0]['content']['parts'][0]['text']
+        # Clean the response from Gemini
+        if summary_json_string.strip().startswith("```json"):
+            summary_json_string = summary_json_string.strip()[7:-3]
+        return summary_json_string
+    except Exception as e:
+        print(f"GEMINI API ERROR: {e}")
+        return None
+
+# --- API Endpoints ---
+@app.route('/register', methods=['POST'])
+def register_user():
+    """Handles new user registration."""
+    data = request.get_json()
+    required_fields = ['firstName', 'lastName', 'email', 'password', 'dob', 'mobileNumber']
+    if not data or not all(k in data for k in required_fields):
+        return jsonify({"success": False, "message": "Missing required fields."}), 400
+
+    password_hash = generate_password_hash(data['password'])
+    conn = get_db_connection()
+    if not conn: return jsonify({"success": False, "message": "Database connection error."}), 500
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email = %s;", (data['email'],))
+            if cur.fetchone():
+                return jsonify({"success": False, "message": "This email address is already in use."}), 409
+            
+            sql = """
+                INSERT INTO users (first_name, last_name, email, password_hash, dob, mobile_number) 
+                VALUES (%s, %s, %s, %s, %s, %s) 
+                RETURNING id, first_name, email;
+            """
+            cur.execute(sql, (data['firstName'], data['lastName'], data['email'], password_hash, data['dob'], data['mobileNumber']))
+            new_user = cur.fetchone()
+            conn.commit()
+            return jsonify({"success": True, "user": new_user}), 201
+    except psycopg2.Error as e:
+        print(f"REGISTRATION DB ERROR: {e}")
+        return jsonify({"success": False, "message": "An internal error occurred."}), 500
+    finally:
+        conn.close()
+
+@app.route('/login', methods=['POST'])
+def login_user():
+    """Handles user login."""
+    data = request.get_json()
+    if not data or not all(k in data for k in ['email', 'password']):
+        return jsonify({"success": False, "message": "Missing email or password."}), 400
+    
+    conn = get_db_connection()
+    if not conn: return jsonify({"success": False, "message": "Database connection error."}), 500
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE email = %s;", (data['email'],))
+            user = cur.fetchone()
+            if user and check_password_hash(user['password_hash'], data['password']):
+                user_data = {"id": user['id'], "firstName": user['first_name'], "email": user['email']}
+                return jsonify({"success": True, "user": user_data}), 200
+            else:
+                return jsonify({"success": False, "message": "Invalid email or password."}), 401
+    except psycopg2.Error as e:
+        print(f"LOGIN DB ERROR: {e}")
+        return jsonify({"success": False, "message": "An internal error occurred."}), 500
+    finally:
+        conn.close()
+
+@app.route('/summarize', methods=['POST'])
+def summarize_notice():
+    """Handles PDF upload and summarization."""
+    if 'notice_pdf' not in request.files:
+        return jsonify({"success": False, "message": "No PDF file provided."}), 400
+    
+    file = request.files['notice_pdf']
+    pdf_bytes = file.read()
+    raw_text = extract_text_from_pdf(pdf_bytes)
+    if not raw_text:
+        return jsonify({"success": False, "message": "Could not read text from PDF."}), 500
+
+    summary_json = call_gemini_api(raw_text)
+    if not summary_json:
+        return jsonify({"success": False, "message": "Failed to get summary from AI."}), 500
+        
+    try:
+        summary_data = json.loads(summary_json)
+        return jsonify({"success": True, "summary": summary_data}), 200
+    except json.JSONDecodeError:
+        return jsonify({"success": False, "message": "AI returned an invalid format."}), 500
+
+# --- Main Execution ---
+if __name__ == '__main__':
+    initialize_database()
+    port = int(os.environ.get('PORT', 10000))
+    app.run(debug=False, host='0.0.0.0', port=port)
+# --- Final Backend Server (tax_analyzer_backend.py) ---
 # This file should be in your GitHub repository connected to Render.
 
 import os
