@@ -26,7 +26,6 @@ DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
 
 # --- Gemini API Details (from Environment Variables) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-# FIX: Corrected the syntax error in the URL f-string.
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
 def get_db_connection():
@@ -85,17 +84,10 @@ def extract_text_from_pdf(pdf_bytes):
 
 def call_gemini_api(text):
     """Calls the Gemini API to summarize the extracted text."""
-    # More forceful and robust prompt to ensure all fields are populated.
     prompt = f"""
-    You are an expert tax notice analyst. Your primary function is to analyze IRS notice text and return a complete, well-structured JSON object.
+    You are a meticulous tax notice analyst. Your task is to analyze the following text from an IRS notice and extract specific information into a single, well-structured JSON object. Do not omit any fields. If a field's information cannot be found, return an empty string "" for that value.
 
-    **Critical Instructions:**
-    1.  **Complete All Fields:** You MUST populate every single field in the JSON structure.
-    2.  **No Omissions:** Do not leave any field blank. If you cannot find information, return an empty string "".
-    3.  **Generate if Missing:** If the source text does not contain explicit information for `noticeMeaning` or `fixSteps`, you MUST intelligently generate the required information based on the context provided by the `noticeType` and other data. For `fixSteps`, provide standard, actionable advice.
-    4.  **Strict JSON Output:** The final output must be ONLY the JSON object, without any surrounding text or markdown formatting like ```json.
-
-    **JSON Structure to Populate:**
+    Based on the text provided, find and populate the following JSON structure:
     {{
       "noticeType": "The notice code, like 'CP23' or 'CP503C'",
       "noticeFor": "The full name of the taxpayer, e.g., 'JAMES & KAREN Q. HINDS'",
@@ -104,13 +96,14 @@ def call_gemini_api(text):
       "amountDue": "The final total amount due as a string, e.g., '$500.73'",
       "payBy": "The payment due date as a string, e.g., 'February 20, 2018'",
       "breakdown": [
-        {{ "item": "The first line item in the billing summary", "amount": "Its corresponding amount" }}
+        {{ "item": "The first line item in the billing summary", "amount": "Its corresponding amount" }},
+        {{ "item": "The second line item", "amount": "Its amount" }}
       ],
-      "noticeMeaning": "GENERATE a concise, 2-line professional explanation of what this notice type means if not explicitly stated.",
-      "whyText": "Extract the reason the user received this notice from the text.",
+      "noticeMeaning": "A concise, 2-line professional explanation of what this specific notice type means.",
+      "whyText": "A paragraph explaining exactly why the user received this notice, based on the text.",
       "fixSteps": {{
-        "agree": "GENERATE clear steps for what to do if the user agrees. Example: 'Pay the amount due by the specified deadline using one of the listed payment options. If you pay in full, no further action is typically required.'",
-        "disagree": "GENERATE clear steps for what to do if the user disagrees. Example: 'Contact the IRS using the phone number on the notice. Have supporting documents ready to explain your position. You may also write to the IRS at the address provided.'"
+        "agree": "A string explaining the steps to take if the user agrees.",
+        "disagree": "A string explaining the steps to take if the user disagrees."
       }},
       "paymentOptions": {{
         "online": "The URL for online payments, e.g., 'www.irs.gov/payments'",
@@ -123,7 +116,7 @@ def call_gemini_api(text):
       }}
     }}
 
-    **Text to Analyze:**
+    Here is the text to analyze:
     ---
     {text}
     ---
@@ -134,6 +127,7 @@ def call_gemini_api(text):
         response.raise_for_status()
         result = response.json()
         
+        # FIX: More robustly parse the Gemini API response to avoid KeyErrors.
         if 'candidates' in result and result['candidates'] and 'content' in result['candidates'][0] and 'parts' in result['candidates'][0]['content'] and result['candidates'][0]['content']['parts']:
             summary_json_string = result['candidates'][0]['content']['parts'][0]['text']
             if summary_json_string.strip().startswith("```json"):
@@ -239,3 +233,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     # debug=False is important for production. Host '0.0.0.0' makes it accessible.
     app.run(debug=False, host='0.0.0.0', port=port)
+```react
