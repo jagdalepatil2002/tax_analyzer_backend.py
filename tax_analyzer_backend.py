@@ -26,7 +26,7 @@ DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
 
 # --- Gemini API Details (from Environment Variables) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+GEMINI_API_URL = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){GEMINI_API_KEY}"
 
 def get_db_connection():
     """Establishes a secure connection to the PostgreSQL database."""
@@ -238,4 +238,3 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     # debug=False is important for production. Host '0.0.0.0' makes it accessible.
     app.run(debug=False, host='0.0.0.0', port=port)
-```react
