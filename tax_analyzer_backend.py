@@ -26,7 +26,8 @@ DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
 
 # --- Gemini API Details (from Environment Variables) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_API_URL = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){GEMINI_API_KEY}"
+# FIX: Corrected the syntax error in the URL f-string.
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
 def get_db_connection():
     """Establishes a secure connection to the PostgreSQL database."""
@@ -84,7 +85,7 @@ def extract_text_from_pdf(pdf_bytes):
 
 def call_gemini_api(text):
     """Calls the Gemini API to summarize the extracted text."""
-    # FIX: More forceful and robust prompt to ensure all fields are populated.
+    # More forceful and robust prompt to ensure all fields are populated.
     prompt = f"""
     You are an expert tax notice analyst. Your primary function is to analyze IRS notice text and return a complete, well-structured JSON object.
 
