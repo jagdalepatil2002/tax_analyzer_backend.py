@@ -1,8 +1,5 @@
-# --- Part 1: Backend Server (tax_analyzer_backend.py) ---
-# To run this:
-# 1. Install dependencies: pip install Flask Flask-Cors psycopg2-binary Werkzeug PyMuPDF requests python-dotenv
-# 2. Create a .env file in the same directory with your database credentials (see below)
-# 3. Run the script: python tax_analyzer_backend.py
+# --- Final Backend Server (tax_analyzer_backend.py) ---
+# This file should be in your GitHub repository connected to Render.
 
 import os
 import psycopg2
@@ -10,19 +7,16 @@ from psycopg2.extras import RealDictCursor
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
-import fitz  # PyMuPDF
+import fitz
 import requests 
 import json
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
-
-# --- Flask App Initialization ---
 app = Flask(__name__)
 CORS(app)
 
-# --- Database Connection Details (Read from Environment Variables) ---
+# --- Database Connection Details (from Environment Variables) ---
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_USER = os.getenv("DB_USER")
@@ -30,12 +24,9 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
 DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
 
-# --- Gemini API Details (Read from Environment Variables) ---
+# --- Gemini API Details (from Environment Variables) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-
-
-# --- Database Helper Functions ---
 
 def get_db_connection():
     """Establishes a connection to the PostgreSQL database."""
@@ -54,11 +45,12 @@ def get_db_connection():
         return None
 
 def create_users_table():
-    """Creates the users table in the database if it doesn't already exist."""
+    """Creates or alters the users table to include new fields."""
     conn = get_db_connection()
     if conn:
         try:
             with conn.cursor() as cur:
+                # Create table if it doesn't exist
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         id SERIAL PRIMARY KEY,
@@ -69,51 +61,36 @@ def create_users_table():
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
+                # Add new columns if they don't exist
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS dob DATE;")
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile_number VARCHAR(25);")
                 conn.commit()
-                print("'users' table checked/created successfully.")
+                print("'users' table checked/updated successfully.")
         except psycopg2.Error as e:
-            print(f"Error creating table: {e}")
+            print(f"Error creating/altering table: {e}")
         finally:
             conn.close()
 
-# --- PDF & AI Helper Functions ---
-
+# --- PDF & AI Helper Functions (Unchanged) ---
 def extract_text_from_pdf(pdf_bytes):
-    """Extracts text from a PDF."""
     text_content = ""
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf_document:
-            for page in pdf_document:
-                text_content += page.get_text()
+            for page in pdf_document: text_content += page.get_text()
         return text_content
     except Exception as e:
         print(f"Error processing PDF: {e}")
         return None
 
 def call_gemini_api(text):
-    """Calls the Gemini API to summarize the extracted text."""
     prompt = f"""
     You are an expert tax notice summarizer. Analyze the following text extracted from an IRS tax notice and return a JSON object with the summary.
     The JSON object must have the following keys: "noticeFor", "address", "ssn", "amountDue", "payBy", "reason", "details", "fixSteps", "paymentOptions", "helpNumber".
-    - "noticeFor": The full name of the taxpayer.
-    - "address": The full address of the taxpayer, with newlines as \\n.
-    - "ssn": The Social Security Number, masked (e.g., XXX-XX-1234).
-    - "amountDue": The total amount due as a string (e.g., "$4,760.91").
-    - "payBy": The payment due date as a string (e.g., "June 10, 2019").
-    - "reason": A single, clear sentence explaining the primary reason for the notice.
-    - "details": An array of strings providing specific bullet points about the changes.
-    - "fixSteps": An object with two keys, "agree" and "disagree", explaining what to do in each case.
-    - "paymentOptions": An object with keys "online", "mail", and "plan".
-    - "helpNumber": The main contact number provided in the notice.
-
-    Here is the text:
     ---
     {text}
     ---
     """
-    
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    
     try:
         response = requests.post(GEMINI_API_URL, json=payload)
         response.raise_for_status()
@@ -122,20 +99,25 @@ def call_gemini_api(text):
         if summary_json_string.strip().startswith("```json"):
             summary_json_string = summary_json_string.strip()[7:-3]
         return summary_json_string
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         print(f"Error calling Gemini API: {e}")
         return None
 
-
 # --- API Endpoints ---
-
 @app.route('/register', methods=['POST'])
 def register_user():
     data = request.get_json()
-    if not data or not all(k in data for k in ['firstName', 'lastName', 'email', 'password']):
+    required_fields = ['firstName', 'lastName', 'email', 'password', 'dob', 'mobileNumber']
+    if not data or not all(k in data for k in required_fields):
         return jsonify({"success": False, "message": "Missing required fields."}), 400
 
-    first_name, last_name, email, password = data['firstName'], data['lastName'], data['email'], data['password']
+    first_name = data['firstName']
+    last_name = data['lastName']
+    email = data['email']
+    password = data['password']
+    dob = data['dob']
+    mobile_number = data['mobileNumber']
+    
     password_hash = generate_password_hash(password)
     conn = get_db_connection()
     if not conn: return jsonify({"success": False, "message": "Database connection error."}), 500
@@ -147,8 +129,8 @@ def register_user():
                 return jsonify({"success": False, "message": "This email address is already in use."}), 409
             
             cur.execute(
-                "INSERT INTO users (first_name, last_name, email, password_hash) VALUES (%s, %s, %s, %s) RETURNING id, first_name, email;",
-                (first_name, last_name, email, password_hash)
+                "INSERT INTO users (first_name, last_name, email, password_hash, dob, mobile_number) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id, first_name, email;",
+                (first_name, last_name, email, password_hash, dob, mobile_number)
             )
             new_user = cur.fetchone()
             conn.commit()
@@ -208,4 +190,6 @@ def summarize_notice():
 # --- Main Execution ---
 if __name__ == '__main__':
     create_users_table()
-    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    # Use the PORT environment variable provided by Render
+    port = int(os.environ.get('PORT', 10000))
+    app.run(debug=False, host='0.0.0.0', port=port)
