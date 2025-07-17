@@ -199,7 +199,12 @@ def summarize_notice():
         return jsonify({"success": False, "message": "AI returned an invalid format."}), 500
 
 # --- Main Execution ---
-if __name__ == '__main__':
+# FIX: The database is now initialized when the application starts,
+# which is the correct way for a production server like Render.
+with app.app_context():
     initialize_database()
-    port = int(os.environ.get('PORT', 10000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+
+if __name__ == '__main__':
+    # This block is for local development, the server is started by Gunicorn on Render
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=True, host='0.0.0.0', port=port)
