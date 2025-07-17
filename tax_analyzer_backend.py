@@ -1,5 +1,5 @@
-# --- Final Backend Server (tax_analyzer_backend.py) ---
-# This is the complete and final version.
+# --- Part 1: Final Backend Server (tax_analyzer_backend.py) ---
+# This file should be in your GitHub repository connected to Render.
 
 import os
 import psycopg2
@@ -8,14 +8,11 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import fitz
-import requests 
+import requests
 import json
 from dotenv import load_dotenv
 
-# Load environment variables for local development
 load_dotenv()
-
-# --- Flask App Initialization ---
 app = Flask(__name__)
 CORS(app)
 
@@ -48,10 +45,7 @@ def get_db_connection():
         return None
 
 def initialize_database():
-    """
-    Creates the users table if it doesn't exist and adds new columns if they are missing.
-    This is the critical fix.
-    """
+    """Creates or alters the users table to include new fields."""
     conn = get_db_connection()
     if not conn:
         print("Could not initialize database, connection failed.")
@@ -59,7 +53,6 @@ def initialize_database():
 
     try:
         with conn.cursor() as cur:
-            # Step 1: Create the base table if it's not there.
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
@@ -67,24 +60,19 @@ def initialize_database():
                     last_name VARCHAR(100) NOT NULL,
                     email VARCHAR(255) UNIQUE NOT NULL,
                     password_hash VARCHAR(255) NOT NULL,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    dob DATE,
+                    mobile_number VARCHAR(25)
                 );
             """)
-            
-            # Step 2: Add the 'dob' column if it doesn't exist.
-            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS dob DATE;")
-            
-            # Step 3: Add the 'mobile_number' column if it doesn't exist.
-            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile_number VARCHAR(25);")
-            
             conn.commit()
-            print("Database schema updated and verified successfully.")
+            print("Database schema verified successfully.")
     except psycopg2.Error as e:
         print(f"DATABASE SCHEMA ERROR: {e}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
-# --- PDF & AI Helper Functions ---
 def extract_text_from_pdf(pdf_bytes):
     """Extracts text from a PDF."""
     try:
@@ -97,30 +85,67 @@ def extract_text_from_pdf(pdf_bytes):
 def call_gemini_api(text):
     """Calls the Gemini API to summarize the extracted text."""
     prompt = f"""
-    You are an expert tax notice summarizer. Analyze the following text extracted from an IRS tax notice and return a JSON object with the summary.
-    The JSON object must have the following keys: "noticeFor", "address", "ssn", "amountDue", "payBy", "reason", "details", "fixSteps", "paymentOptions", "helpNumber".
+    You are a meticulous tax notice analyst. Your task is to analyze the following text from an IRS notice and extract specific information into a single, well-structured JSON object. Do not omit any fields. If a field's information cannot be found, return an empty string "" for that value.
+
+    Based on the text provided, find and populate the following JSON structure:
+    {{
+      "noticeType": "The notice code, like 'CP23' or 'CP503C'",
+      "noticeFor": "The full name of the taxpayer, e.g., 'JAMES & KAREN Q. HINDS'",
+      "address": "The full address of the taxpayer, with newlines as \\n, e.g., '22 BOULDER STREET\\nHANSON, CT 00000-7253'",
+      "ssn": "The Social Security Number, masked, e.g., 'nnn-nn-nnnn'",
+      "amountDue": "The final total amount due as a string, e.g., '$500.73'",
+      "payBy": "The payment due date as a string, e.g., 'February 20, 2018'",
+      "breakdown": [
+        {{ "item": "The first line item in the billing summary", "amount": "Its corresponding amount" }},
+        {{ "item": "The second line item", "amount": "Its amount" }}
+      ],
+      "noticeMeaning": "A concise, 2-line professional explanation of what this specific notice type means.",
+      "whyText": "A paragraph explaining exactly why the user received this notice, based on the text.",
+      "fixSteps": {{
+        "agree": "A string explaining the steps to take if the user agrees.",
+        "disagree": "A string explaining the steps to take if the user disagrees."
+      }},
+      "paymentOptions": {{
+        "online": "The URL for online payments, e.g., 'www.irs.gov/payments'",
+        "mail": "Instructions for paying by mail.",
+        "plan": "The URL for setting up a payment plan, e.g., 'www.irs.gov/paymentplan'"
+      }},
+      "helpInfo": {{
+        "contact": "The primary contact phone number for questions.",
+        "advocate": "Information about the Taxpayer Advocate Service, including their phone number."
+      }}
+    }}
+
+    Here is the text to analyze:
     ---
     {text}
     ---
     """
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     try:
-        response = requests.post(GEMINI_API_URL, json=payload, timeout=30)
+        response = requests.post(GEMINI_API_URL, json=payload, timeout=45)
         response.raise_for_status()
         result = response.json()
-        summary_json_string = result['candidates'][0]['content']['parts'][0]['text']
-        # Clean the response from Gemini
-        if summary_json_string.strip().startswith("```json"):
-            summary_json_string = summary_json_string.strip()[7:-3]
-        return summary_json_string
+        
+        # FIX: More robustly parse the Gemini API response to avoid KeyErrors.
+        if 'candidates' in result and result['candidates'] and 'content' in result['candidates'][0] and 'parts' in result['candidates'][0]['content'] and result['candidates'][0]['content']['parts']:
+            summary_json_string = result['candidates'][0]['content']['parts'][0]['text']
+            if summary_json_string.strip().startswith("```json"):
+                summary_json_string = summary_json_string.strip()[7:-3]
+            return summary_json_string
+        else:
+            print("GEMINI API ERROR: Unexpected response structure.")
+            return None
+
+    except requests.exceptions.RequestException as e:
+        print(f"GEMINI API REQUEST FAILED: {e}")
+        return None
     except Exception as e:
-        print(f"GEMINI API ERROR: {e}")
+        print(f"GEMINI API UNKNOWN ERROR: {e}")
         return None
 
-# --- API Endpoints ---
 @app.route('/register', methods=['POST'])
 def register_user():
-    """Handles new user registration."""
     data = request.get_json()
     required_fields = ['firstName', 'lastName', 'email', 'password', 'dob', 'mobileNumber']
     if not data or not all(k in data for k in required_fields):
@@ -149,11 +174,11 @@ def register_user():
         print(f"REGISTRATION DB ERROR: {e}")
         return jsonify({"success": False, "message": "An internal error occurred."}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 @app.route('/login', methods=['POST'])
 def login_user():
-    """Handles user login."""
     data = request.get_json()
     if not data or not all(k in data for k in ['email', 'password']):
         return jsonify({"success": False, "message": "Missing email or password."}), 400
@@ -174,11 +199,11 @@ def login_user():
         print(f"LOGIN DB ERROR: {e}")
         return jsonify({"success": False, "message": "An internal error occurred."}), 500
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 @app.route('/summarize', methods=['POST'])
 def summarize_notice():
-    """Handles PDF upload and summarization."""
     if 'notice_pdf' not in request.files:
         return jsonify({"success": False, "message": "No PDF file provided."}), 400
     
@@ -196,15 +221,16 @@ def summarize_notice():
         summary_data = json.loads(summary_json)
         return jsonify({"success": True, "summary": summary_data}), 200
     except json.JSONDecodeError:
+        print(f"AI returned invalid JSON: {summary_json}")
         return jsonify({"success": False, "message": "AI returned an invalid format."}), 500
 
-# --- Main Execution ---
-# FIX: The database is now initialized when the application starts,
-# which is the correct way for a production server like Render.
+# This block ensures the database table is ready when the app starts.
 with app.app_context():
     initialize_database()
 
 if __name__ == '__main__':
-    # This block is for local development, the server is started by Gunicorn on Render
-    port = int(os.environ.get('PORT', 5000))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    # Render uses the PORT environment variable to bind the server.
+    port = int(os.environ.get('PORT', 10000))
+    # debug=False is important for production. Host '0.0.0.0' makes it accessible.
+    app.run(debug=False, host='0.0.0.0', port=port)
+```react
