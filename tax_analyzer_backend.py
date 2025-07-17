@@ -1,288 +1,234 @@
-// --- Part 2: Final Frontend Application (App.js) ---
-// This file should be in your GitHub repository connected to Vercel.
+# --- Part 1: Final Backend Server (tax_analyzer_backend.py) ---
+# This file should be in your GitHub repository connected to Render.
 
-import React, { useState } from 'react';
+import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
+import fitz
+import requests
+import json
+from dotenv import load_dotenv
 
-const API_BASE_URL = 'https://tax-analyzer-backend.onrender.com'; 
+load_dotenv()
+app = Flask(__name__)
+CORS(app)
 
-const api = {
-  async register(payload) {
-    const response = await fetch(`${API_BASE_URL}/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    return response.json();
-  },
-  async login(payload) {
-    const response = await fetch(`${API_BASE_URL}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    return response.json();
-  },
-  async summarize(file) {
-    const formData = new FormData();
-    formData.append('notice_pdf', file);
-    const response = await fetch(`${API_BASE_URL}/summarize`, {
-      method: 'POST',
-      body: formData,
-    });
-    return response.json();
-  },
-};
+# --- Database Connection Details (from Environment Variables) ---
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_NAME = os.getenv("DB_NAME")
+DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
 
-// --- Helper Components & Icons ---
-const FileHeart = (props) => ( <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4" /><path d="M14 2v6h6" /><path d="M10.3 12.3c.8-1 2-1.5 3.2-1.5 2.2 0 4 1.8 4 4 0 2.5-3.4 4.9-5.2 6.2a.5.5 0 0 1-.6 0C10 19.4 6 17 6 14.5c0-2.2 1.8-4 4-4 .8 0 1.5.3 2.1.8" /></svg> );
-const LoadingSpinner = () => ( <div className="flex flex-col items-center justify-center space-y-4"><div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-purple-600"></div><p className="text-purple-700 font-semibold">Analyzing your notice...</p></div> );
+# --- Gemini API Details (from Environment Variables) ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
-// --- Screen Components ---
-const AuthScreen = ({ isLogin, handleLogin, handleRegister, error, firstName, setFirstName, lastName, setLastName, email, setEmail, password, setPassword, confirmPassword, setConfirmPassword, dob, setDob, mobileNumber, setMobileNumber, countryCode, setCountryCode, setView, clearFormFields}) => {
-    const countryCodes = [
-        { name: 'United States', code: 'US', dial_code: '+1' },
-        { name: 'India', code: 'IN', dial_code: '+91' },
-        { name: 'United Kingdom', code: 'GB', dial_code: '+44' },
-    ].sort((a,b) => a.name.localeCompare(b.name));
+def get_db_connection():
+    """Establishes a secure connection to the PostgreSQL database."""
+    if not all([DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME]):
+        print("FATAL ERROR: Database environment variables are not fully set.")
+        return None
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST, port=DB_PORT, user=DB_USER,
+            password=DB_PASSWORD, dbname=DB_NAME, sslmode=DB_SSL_MODE,
+            cursor_factory=RealDictCursor
+        )
+        return conn
+    except psycopg2.Error as e:
+        print(f"DATABASE CONNECTION FAILED: {e}")
+        return None
 
-    return (
-    <div className="bg-white p-8 sm:p-10 rounded-2xl shadow-lg border border-gray-100 max-w-md w-full" style={{ backgroundColor: '#F9F5FF' }}>
-        <h2 className="text-3xl font-bold text-center text-purple-800 mb-1">{isLogin ? "Hello There!" : "Create Your Account"}</h2>
-        <p className="text-center text-purple-600 mb-8">{isLogin ? "Let's get you signed in." : "Join us to simplify your tax notices."}</p>
-        <form onSubmit={isLogin ? handleLogin : handleRegister} className="space-y-4">
-            {!isLogin && (
-                <>
-                    <div className="grid grid-cols-2 gap-4">
-                        <input type="text" placeholder="First Name" value={firstName} onChange={e => setFirstName(e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-purple-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" required />
-                        <input type="text" placeholder="Last Name" value={lastName} onChange={e => setLastName(e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-purple-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" required />
-                    </div>
-                    <input type="text" placeholder="Date of Birth" onFocus={(e) => e.target.type='date'} onBlur={(e) => { if(!e.target.value) e.target.type='text'}} value={dob} onChange={e => setDob(e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-purple-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-700" required />
-                    <div className="flex">
-                        <select value={countryCode} onChange={e => setCountryCode(e.target.value)} className="bg-gray-50 border-2 border-r-0 border-purple-200 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-purple-500 px-2 text-gray-700">
-                            {countryCodes.map(country => ( <option key={country.code} value={country.dial_code}>{country.name} ({country.dial_code})</option> ))}
-                        </select>
-                        <input type="tel" placeholder="Mobile Number" value={mobileNumber} onChange={e => setMobileNumber(e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-purple-200 rounded-r-lg focus:outline-none focus:ring-2 focus:ring-purple-500" required />
-                    </div>
-                </>
-            )}
-            <input type="email" placeholder="Your Email" value={email} onChange={e => setEmail(e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-purple-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" required />
-            <input type="password" placeholder="Your Password" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-purple-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" required />
-            {!isLogin && ( <input type="password" placeholder="Confirm Password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} className="w-full px-4 py-3 bg-white border-2 border-purple-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" required /> )}
-            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-            <button type="submit" className="w-full bg-purple-600 text-white font-semibold py-3 rounded-lg hover:bg-purple-700 transition-colors shadow-md shadow-purple-200 !mt-6">{isLogin ? "Let's Go!" : "Create Account"}</button>
-        </form>
-        <p className="text-center text-sm text-purple-600 mt-6">
-            {isLogin ? "First time here?" : "Already have an account?"}
-            <button onClick={() => { setView(isLogin ? 'register' : 'login'); clearFormFields(); }} className="font-semibold text-purple-700 hover:underline ml-1">{isLogin ? "Join us!" : "Sign in"}</button>
-        </p>
-    </div>
-    )
-};
-const UploadScreen = ({ handleLogout, handleFileUpload }) => {
-    const handleDragOver = (e) => e.preventDefault();
-    const handleDrop = (e) => { e.preventDefault(); if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]); };
-    const handleFileSelect = (e) => { if (e.target.files.length > 0) handleFileUpload(e.target.files[0]); };
-    return (
-        <div className="bg-white p-8 sm:p-10 rounded-2xl shadow-lg border border-gray-100 max-w-2xl w-full" style={{ backgroundColor: '#F9F5FF' }}>
-            <div className="flex justify-between items-center mb-6"> <h2 className="text-3xl font-bold text-purple-800">Tax Helper</h2> <button onClick={handleLogout} className="text-purple-600 hover:text-purple-800 font-semibold">Sign Out</button> </div>
-            <p className="text-purple-600 mb-8">Don't stress! Just upload your notice and we'll make sense of it for you.</p>
-            <div className="border-2 border-dashed border-purple-300 rounded-xl p-12 text-center bg-purple-50 cursor-pointer hover:bg-purple-100 transition-colors" onDragOver={handleDragOver} onDrop={handleDrop} onClick={() => document.getElementById('file-input').click()}>
-                <FileHeart className="mx-auto h-16 w-16 text-purple-400" />
-                <p className="mt-4 text-lg text-purple-700">Drop your PDF file here</p>
-                <p className="text-sm text-purple-500 mt-1">or</p>
-                <button className="mt-4 bg-white border-2 border-purple-200 text-purple-700 font-semibold py-2 px-4 rounded-lg hover:bg-purple-100">Pick a File</button>
-                <input type="file" id="file-input" className="hidden" accept=".pdf" onChange={handleFileSelect} />
-            </div>
-        </div>
-    );
-};
+def initialize_database():
+    """Creates or alters the users table to include new fields."""
+    conn = get_db_connection()
+    if not conn:
+        print("Could not initialize database, connection failed.")
+        return
 
-// FIX: Rebuilt SummaryScreen to render the final detailed format.
-const SummaryScreen = ({ summaryData, resetApp }) => (
-    <div className="bg-white p-8 sm:p-10 rounded-2xl shadow-lg border border-gray-100 max-w-3xl w-full" style={{ backgroundColor: '#F9F5FF' }}>
-        <h1 className="text-3xl font-bold text-purple-800 mb-2 text-center">Summary of Your IRS Notice {summaryData.noticeType}</h1>
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    first_name VARCHAR(100) NOT NULL,
+                    last_name VARCHAR(100) NOT NULL,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    dob DATE,
+                    mobile_number VARCHAR(25)
+                );
+            """)
+            conn.commit()
+            print("Database schema verified successfully.")
+    except psycopg2.Error as e:
+        print(f"DATABASE SCHEMA ERROR: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def extract_text_from_pdf(pdf_bytes):
+    """Extracts text from a PDF."""
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            return "".join(page.get_text() for page in doc)
+    except Exception as e:
+        print(f"PDF EXTRACTION ERROR: {e}")
+        return None
+
+def call_gemini_api(text):
+    """Calls the Gemini API to summarize the extracted text."""
+    prompt = f"""
+    You are a meticulous tax notice analyst. Your task is to analyze the following text from an IRS notice and extract specific information into a single, well-structured JSON object. Do not omit any fields. If a field's information cannot be found, return an empty string "" for that value.
+
+    Based on the text provided, find and populate the following JSON structure:
+    {{
+      "noticeType": "The notice code, like 'CP23' or 'CP503C'",
+      "noticeFor": "The full name of the taxpayer, e.g., 'JAMES & KAREN Q. HINDS'",
+      "address": "The full address of the taxpayer, with newlines as \\n, e.g., '22 BOULDER STREET\\nHANSON, CT 00000-7253'",
+      "ssn": "The Social Security Number, masked, e.g., 'nnn-nn-nnnn'",
+      "amountDue": "The final total amount due as a string, e.g., '$500.73'",
+      "payBy": "The payment due date as a string, e.g., 'February 20, 2018'",
+      "breakdown": [
+        {{ "item": "The first line item in the billing summary", "amount": "Its corresponding amount" }},
+        {{ "item": "The second line item", "amount": "Its amount" }}
+      ],
+      "noticeMeaning": "A concise, 2-line professional explanation of what this specific notice type means.",
+      "whyText": "A paragraph explaining exactly why the user received this notice, based on the text.",
+      "fixSteps": {{
+        "agree": "A string explaining the steps to take if the user agrees.",
+        "disagree": "A string explaining the steps to take if the user disagrees."
+      }},
+      "paymentOptions": {{
+        "online": "The URL for online payments, e.g., 'www.irs.gov/payments'",
+        "mail": "Instructions for paying by mail.",
+        "plan": "The URL for setting up a payment plan, e.g., 'www.irs.gov/paymentplan'"
+      }},
+      "helpInfo": {{
+        "contact": "The primary contact phone number for questions.",
+        "advocate": "Information about the Taxpayer Advocate Service, including their phone number."
+      }}
+    }}
+
+    Here is the text to analyze:
+    ---
+    {text}
+    ---
+    """
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    try:
+        response = requests.post(GEMINI_API_URL, json=payload, timeout=45)
+        response.raise_for_status()
+        result = response.json()
         
-        <div className="bg-purple-50/50 p-6 rounded-xl border-2 border-purple-100 my-6">
-             <h3 className="font-bold text-purple-900">Notice For:</h3>
-             <p className="text-purple-700">{summaryData.noticeFor || 'Not found'}</p>
-             <p className="text-purple-700 whitespace-pre-wrap">{summaryData.address || 'Not found'}</p>
-             <p className="text-purple-700 mt-2"><span className="font-semibold">Social Security Number:</span> {summaryData.ssn || 'Not found'}</p>
-        </div>
+        if 'candidates' in result and result['candidates'] and 'content' in result['candidates'][0] and 'parts' in result['candidates'][0]['content'] and result['candidates'][0]['content']['parts']:
+            summary_json_string = result['candidates'][0]['content']['parts'][0]['text']
+            if summary_json_string.strip().startswith("```json"):
+                summary_json_string = summary_json_string.strip()[7:-3]
+            return summary_json_string
+        else:
+            print("GEMINI API ERROR: Unexpected response structure.")
+            return None
 
-        <div className="grid md:grid-cols-2 gap-4 text-center bg-purple-600 text-white p-6 rounded-xl mb-8 shadow-md shadow-purple-200">
-            <div>
-                <p className="text-sm uppercase font-bold tracking-wider opacity-80">Amount Due</p>
-                <p className="text-3xl font-bold">{summaryData.amountDue || 'N/A'}</p>
-            </div>
-             <div>
-                <p className="text-sm uppercase font-bold tracking-wider opacity-80">Pay By</p>
-                <p className="text-3xl font-bold">{summaryData.payBy || 'N/A'}</p>
-            </div>
-        </div>
+    except requests.exceptions.RequestException as e:
+        print(f"GEMINI API REQUEST FAILED: {e}")
+        return None
+    except Exception as e:
+        print(f"GEMINI API UNKNOWN ERROR: {e}")
+        return None
 
-        <div className="space-y-8">
-            {summaryData.noticeMeaning && (
-            <div>
-                <h3 className="flex items-center text-xl font-bold text-purple-800 mb-3">Understanding Your Notice ({summaryData.noticeType})</h3>
-                <p className="text-purple-700 bg-purple-50 p-4 rounded-lg border border-purple-100">{summaryData.noticeMeaning}</p>
-            </div>
-            )}
+@app.route('/register', methods=['POST'])
+def register_user():
+    data = request.get_json()
+    required_fields = ['firstName', 'lastName', 'email', 'password', 'dob', 'mobileNumber']
+    if not data or not all(k in data for k in required_fields):
+        return jsonify({"success": False, "message": "Missing required fields."}), 400
 
-            {summaryData.whyText && (
-            <div>
-                <h3 className="flex items-center text-xl font-bold text-purple-800 mb-3">
-                    <span className="text-2xl mr-3">❓</span> Why did I receive this?
-                </h3>
-                <p className="text-purple-700">{summaryData.whyText}</p>
-                {summaryData.breakdown && summaryData.breakdown.length > 0 && (
-                    <table className="min-w-full bg-white mt-4 rounded-lg border border-purple-200">
-                        <thead className="bg-purple-50">
-                            <tr>
-                                <th className="text-left py-2 px-4 font-semibold text-purple-800">Item</th>
-                                <th className="text-right py-2 px-4 font-semibold text-purple-800">Amount</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {summaryData.breakdown.map((item, index) => (
-                                <tr key={index} className="border-t border-purple-200">
-                                    <td className="py-2 px-4 text-purple-700">{item.item}</td>
-                                    <td className="py-2 px-4 text-purple-700 text-right font-mono">{item.amount}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                )}
-            </div>
-            )}
+    password_hash = generate_password_hash(data['password'])
+    conn = get_db_connection()
+    if not conn: return jsonify({"success": False, "message": "Database connection error."}), 500
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email = %s;", (data['email'],))
+            if cur.fetchone():
+                return jsonify({"success": False, "message": "This email address is already in use."}), 409
             
-            {summaryData.fixSteps && (
-            <div>
-                <h3 className="flex items-center text-xl font-bold text-purple-800 mb-3">
-                    <span className="text-2xl mr-3">✔️</span> How should I fix this?
-                </h3>
-                <div className="bg-green-50 border border-green-200 p-4 rounded-lg mb-3">
-                     <p className="font-semibold text-green-800">If You Agree:</p>
-                     <p className="text-green-700 text-sm">{summaryData.fixSteps.agree || 'Information not available.'}</p>
-                </div>
-                 <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg">
-                     <p className="font-semibold text-yellow-800">If You Disagree:</p>
-                     <p className="text-yellow-700 text-sm">{summaryData.fixSteps.disagree || 'Information not available.'}</p>
-                </div>
-            </div>
-            )}
+            sql = """
+                INSERT INTO users (first_name, last_name, email, password_hash, dob, mobile_number) 
+                VALUES (%s, %s, %s, %s, %s, %s) 
+                RETURNING id, first_name, email;
+            """
+            cur.execute(sql, (data['firstName'], data['lastName'], data['email'], password_hash, data['dob'], data['mobileNumber']))
+            new_user = cur.fetchone()
+            conn.commit()
+            return jsonify({"success": True, "user": new_user}), 201
+    except psycopg2.Error as e:
+        print(f"REGISTRATION DB ERROR: {e}")
+        return jsonify({"success": False, "message": "An internal error occurred."}), 500
+    finally:
+        if conn:
+            conn.close()
 
-             {summaryData.paymentOptions && (
-             <div>
-                <h3 className="flex items-center text-xl font-bold text-purple-800 mb-3">
-                    <span className="text-2xl mr-3">💳</span> How do I pay?
-                </h3>
-                 <ul className="space-y-2 text-purple-700 text-sm bg-purple-50 p-4 rounded-lg border border-purple-100">
-                    <li><strong>Online:</strong> <a href={`https://${summaryData.paymentOptions.online}`} target="_blank" rel="noopener noreferrer" className="text-purple-600 font-semibold hover:underline">{summaryData.paymentOptions.online || 'Not specified'}</a></li>
-                    <li><strong>By Mail:</strong> {summaryData.paymentOptions.mail || 'Not specified'}</li>
-                    <li><strong>Payment Plan:</strong> <a href={`https://${summaryData.paymentOptions.plan}`} target="_blank" rel="noopener noreferrer" className="text-purple-600 font-semibold hover:underline">{summaryData.paymentOptions.plan || 'Not specified'}</a></li>
-                 </ul>
-            </div>
-            )}
-
-             {summaryData.helpInfo && (
-             <div>
-                <h3 className="flex items-center text-xl font-bold text-purple-800 mb-3">
-                    <span className="text-2xl mr-3">🙋</span> I need more help!
-                </h3>
-                 <ul className="space-y-2 text-purple-700 text-sm bg-purple-50 p-4 rounded-lg border border-purple-100">
-                    <li>{summaryData.helpInfo.contact || 'Contact info not found.'}</li>
-                    <li>{summaryData.helpInfo.advocate || 'Advocate info not found.'}</li>
-                 </ul>
-            </div>
-            )}
-        </div>
-        
-        <div className="text-center mt-10">
-             <button onClick={resetApp} className="bg-purple-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-purple-700 transition-colors">
-                Analyze Another Notice
-             </button>
-        </div>
-    </div>
-);
-
-
-// --- Main Application Component ---
-export default function App() {
-    const [view, setView] = useState('login');
-    const [user, setUser] = useState(null);
-    const [error, setError] = useState('');
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
-    const [firstName, setFirstName] = useState('');
-    const [lastName, setLastName] = useState('');
-    const [dob, setDob] = useState('');
-    const [countryCode, setCountryCode] = useState('+91');
-    const [mobileNumber, setMobileNumber] = useState('');
-    const [summaryData, setSummaryData] = useState(null);
-
-    const clearFormFields = () => {
-        setEmail(''); setPassword(''); setConfirmPassword('');
-        setFirstName(''); setLastName(''); setError('');
-        setDob(''); setMobileNumber(''); setCountryCode('+91');
-    };
-
-    const handleRegister = async (e) => {
-        e.preventDefault();
-        setError('');
-        if (password !== confirmPassword) { setError("Passwords do not match."); return; }
-        const fullMobileNumber = `${countryCode}${mobileNumber}`;
-        const result = await api.register({ firstName, lastName, email, password, dob, mobileNumber: fullMobileNumber });
-        if (result.success) { setUser(result.user); setView('upload'); } 
-        else { setError(result.message); }
-    };
-
-    const handleLogin = async (e) => {
-        e.preventDefault();
-        setError('');
-        const result = await api.login({ email, password });
-        if (result.success) { setUser(result.user); setView('upload'); }
-        else { setError(result.message); }
-    };
-
-    const handleLogout = () => { setUser(null); setView('login'); };
+@app.route('/login', methods=['POST'])
+def login_user():
+    data = request.get_json()
+    if not data or not all(k in data for k in ['email', 'password']):
+        return jsonify({"success": False, "message": "Missing email or password."}), 400
     
-    const handleFileUpload = async (file) => {
-        if (file) {
-            setView('analyzing');
-            try {
-                const result = await api.summarize(file);
-                if (result.success) {
-                    setSummaryData(result.summary);
-                    setView('summary');
-                } else {
-                    setError(result.message || "An error occurred during analysis.");
-                    setView('upload'); 
-                }
-            } catch (e) {
-                console.error("File upload/summary error:", e);
-                setError("Could not connect to the analysis server. Please try again later.");
-                setView('upload');
-            }
-        }
-    };
+    conn = get_db_connection()
+    if not conn: return jsonify({"success": False, "message": "Database connection error."}), 500
 
-    const resetApp = () => { setView('upload'); setSummaryData(null); };
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE email = %s;", (data['email'],))
+            user = cur.fetchone()
+            if user and check_password_hash(user['password_hash'], data['password']):
+                user_data = {"id": user['id'], "firstName": user['first_name'], "email": user['email']}
+                return jsonify({"success": True, "user": user_data}), 200
+            else:
+                return jsonify({"success": False, "message": "Invalid email or password."}), 401
+    except psycopg2.Error as e:
+        print(f"LOGIN DB ERROR: {e}")
+        return jsonify({"success": False, "message": "An internal error occurred."}), 500
+    finally:
+        if conn:
+            conn.close()
 
-    const renderView = () => {
-        switch (view) {
-            case 'register': return <AuthScreen isLogin={false} handleRegister={handleRegister} error={error} firstName={firstName} setFirstName={setFirstName} lastName={lastName} setLastName={setLastName} email={email} setEmail={setEmail} password={password} setPassword={setPassword} confirmPassword={confirmPassword} setConfirmPassword={setConfirmPassword} dob={dob} setDob={setDob} mobileNumber={mobileNumber} setMobileNumber={setMobileNumber} countryCode={countryCode} setCountryCode={setCountryCode} setView={setView} clearFormFields={clearFormFields} />;
-            case 'login': return <AuthScreen isLogin={true} handleLogin={handleLogin} error={error} email={email} setEmail={setEmail} password={password} setPassword={setPassword} setView={setView} clearFormFields={clearFormFields} />;
-            case 'upload': return <UploadScreen handleLogout={handleLogout} handleFileUpload={handleFileUpload} />;
-            case 'analyzing': return <LoadingSpinner />;
-            case 'summary': return <SummaryScreen summaryData={summaryData} resetApp={resetApp} />;
-            default: return <div className="text-purple-500">Loading...</div>;
-        }
-    };
+@app.route('/summarize', methods=['POST'])
+def summarize_notice():
+    if 'notice_pdf' not in request.files:
+        return jsonify({"success": False, "message": "No PDF file provided."}), 400
+    
+    file = request.files['notice_pdf']
+    pdf_bytes = file.read()
+    raw_text = extract_text_from_pdf(pdf_bytes)
+    if not raw_text:
+        return jsonify({"success": False, "message": "Could not read text from PDF."}), 500
 
-    return (
-        <div className="min-h-screen bg-purple-100 flex items-center justify-center p-4" style={{ background: 'linear-gradient(135deg, #EDE9FE, #F3E8FF)'}}>
-            {renderView()}
-        </div>
-    );
-}
+    summary_json = call_gemini_api(raw_text)
+    if not summary_json:
+        return jsonify({"success": False, "message": "Failed to get summary from AI."}), 500
+        
+    try:
+        summary_data = json.loads(summary_json)
+        return jsonify({"success": True, "summary": summary_data}), 200
+    except json.JSONDecodeError:
+        print(f"AI returned invalid JSON: {summary_json}")
+        return jsonify({"success": False, "message": "AI returned an invalid format."}), 500
+
+# This block ensures the database table is ready when the app starts.
+with app.app_context():
+    initialize_database()
+
+if __name__ == '__main__':
+    # Render uses the PORT environment variable to bind the server.
+    port = int(os.environ.get('PORT', 10000))
+    # debug=False is important for production. Host '0.0.0.0' makes it accessible.
+    app.run(debug=False, host='0.0.0.0', port=port)
